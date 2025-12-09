@@ -1,51 +1,166 @@
-/* metrics.js OPTIMISÉ - Version légère et différée */
+/* metrics.js — widget d'évaluation des performances (client-side)
+   Affiche FCP, LCP, CLS, TBT (~approx), #requêtes et poids total.
+   N'emploie aucune dépendance externe. */
 (function(){
-  const s={fcp:null,lcp:null,cls:0,tbt:0,res:[],req:0,bytes:0,nav:null};
-  const fmt=v=>v==null?'-':v.toFixed(0)+' ms';
-  const kb=v=>v==null?'-':(v/1024).toFixed(1)+' KB';
-  
-  // 1. OBSERVERS (Silencieux et passifs)
-  try{new PerformanceObserver(l=>{for(const e of l.getEntries()){if(e.name==='first-contentful-paint'&&!s.fcp){s.fcp=e.startTime;up();}}}).observe({type:'paint',buffered:true});}catch(e){}
-  try{const poL=new PerformanceObserver(l=>{const e=l.getEntries().pop();if(e)s.lcp=e.renderTime||e.loadTime||e.startTime;up();});poL.observe({type:'largest-contentful-paint',buffered:true});addEventListener('visibilitychange',()=>document.visibilityState==='hidden'&&poL.takeRecords());}catch(e){}
-  try{new PerformanceObserver(l=>{for(const e of l.getEntries()){if(!e.hadRecentInput)s.cls+=e.value;up();}}).observe({type:'layout-shift',buffered:true});}catch(e){}
-  try{new PerformanceObserver(l=>{for(const e of l.getEntries()){s.tbt+=Math.max(0,e.duration-50);}up();}).observe({entryTypes:['longtask']});}catch(e){}
+  const state = {
+    fcp: null,
+    lcp: null,
+    cls: 0,
+    clsEntries: [],
+    longTasks: 0,
+    longTasksTime: 0,
+    totalBlockingTime: 0, // approx: somme (longTask - 50ms)
+    resources: [],
+    totalRequests: 0,
+    totalBytes: 0,
+    nav: null
+  };
 
-  // 2. CALCULS
-  function col(){
-    const r=performance.getEntriesByType('resource');
-    s.res=r;s.req=r.length+1;
-    s.bytes=r.reduce((a,c)=>(c.transferSize>0?c.transferSize:(c.encodedBodySize||0))+a,0);
-    s.nav=performance.getEntriesByType('navigation')[0];
+  // Helper: formatters
+  const fmtMs = v => (v==null?'-':v.toFixed(0)+' ms');
+  const fmtKB = v => (v==null?'-':(v/1024).toFixed(1)+' KB');
+
+  // Observe FCP (first-contentful-paint)
+  try{
+    const poPaint = new PerformanceObserver((list)=>{
+      for(const e of list.getEntries()){
+        if(e.name === 'first-contentful-paint' && state.fcp == null){
+          state.fcp = e.startTime;
+          update();
+          poPaint.disconnect();
+        }
+      }
+    });
+    poPaint.observe({ type:'paint', buffered:true });
+  }catch(err){}
+
+  // Observe LCP (largest-contentful-paint)
+  try{
+    const poLcp = new PerformanceObserver((list)=>{
+      for(const e of list.getEntries()){
+        state.lcp = e.renderTime || e.loadTime || e.startTime;
+      }
+      update();
+    });
+    poLcp.observe({ type:'largest-contentful-paint', buffered:true });
+    addEventListener('visibilitychange', ()=>{
+      if(document.visibilityState === 'hidden') poLcp.takeRecords();
+    });
+  }catch(err){}
+
+  // Observe CLS (cumulative layout shift)
+  try{
+    const poCls = new PerformanceObserver((list)=>{
+      for(const e of list.getEntries()){
+        if(!e.hadRecentInput){
+          state.cls += e.value;
+          state.clsEntries.push(e);
+        }
+      }
+      update();
+    });
+    poCls.observe({ type:'layout-shift', buffered:true });
+  }catch(err){}
+
+  // Observe Long Tasks => approx TBT = somme(max(0, duration-50ms))
+  try{
+    const poLT = new PerformanceObserver((list)=>{
+      for(const e of list.getEntries()){
+        state.longTasks++;
+        state.longTasksTime += e.duration;
+        state.totalBlockingTime += Math.max(0, e.duration - 50);
+      }
+      update();
+    });
+    poLT.observe({ entryTypes:['longtask'] });
+  }catch(err){}
+
+  function collectResources(){
+    const entries = performance.getEntriesByType('resource');
+    state.resources = entries;
+    state.totalRequests = entries.length + 1; // +1 pour le document HTML
+
+    // Try transferSize/encodedBodySize; fallback à encoded if transfer is 0; sinon unknown
+    let total = 0;
+    for(const r of entries){
+      const bytes = (r.transferSize && r.transferSize>0) ? r.transferSize : (r.encodedBodySize||0);
+      total += bytes;
+    }
+    state.totalBytes = total;
   }
 
-  // 3. UI (Interface Graphique)
-  const p=document.createElement('div');
-  p.id='perf-panel';
-  p.style.cssText="position:fixed;right:16px;bottom:16px;z-index:9999;width:300px;font-family:sans-serif;background:rgba(10,12,28,.95);color:#fff;border:1px solid #333;border-radius:8px;padding:12px;font-size:12px;backdrop-filter:blur(4px);display:none;";
-  p.innerHTML=`<div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>PERFS</b><div><button id="ref" style="background:#7C5CFF;color:#fff;border:0;border-radius:4px;cursor:pointer;margin-right:4px">Mesurer</button><button id="cls" style="background:0;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer">x</button></div></div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
-    <div>FCP: <b id="d-fcp">-</b></div><div>LCP: <b id="d-lcp">-</b></div>
-    <div>CLS: <b id="d-cls">-</b></div><div>TBT: <b id="d-tbt">-</b></div>
-    <div>Req: <b id="d-req">-</b></div><div>Poids: <b id="d-bytes">-</b></div>
-  </div>`;
+  function collectNavigation(){
+    const nav = performance.getEntriesByType('navigation')[0];
+    if(nav) state.nav = nav;
+  }
 
-  // 4. AFFICHAGE (Seulement après le chargement complet pour ne pas polluer le LCP)
-  window.addEventListener('load', ()=>{
-    document.body.appendChild(p);
-    p.style.display='block';
-    setTimeout(up, 100); 
+  // UI panel
+  const panel = document.createElement('div');
+  panel.setAttribute('id', 'perf-panel');
+  Object.assign(panel.style, {
+    position:'fixed', right:'16px', bottom:'16px', zIndex:9999,
+    width:'320px', maxWidth:'90vw', fontFamily:'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial',
+    background:'rgba(10,12,28,.9)', color:'#E8ECF1', border:'1px solid rgba(255,255,255,.12)',
+    borderRadius:'12px', boxShadow:'0 10px 40px rgba(0,0,0,.5)',
+    backdropFilter:'blur(6px) saturate(120%)', padding:'12px 14px'
+  });
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+      <strong style="letter-spacing:.2px">Évaluation perfs</strong>
+      <div>
+        <button id="perf-refresh" style="background:#7C5CFF;color:white;border:0;border-radius:8px;padding:6px 10px;cursor:pointer">Mesurer</button>
+        <button id="perf-close" style="background:transparent;color:#c9d1d9;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 8px;margin-left:6px;cursor:pointer">×</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+      <div><div style="opacity:.8">FCP</div><div id="m-fcp" style="font-weight:600">-</div></div>
+      <div><div style="opacity:.8">LCP</div><div id="m-lcp" style="font-weight:600">-</div></div>
+      <div><div style="opacity:.8">CLS</div><div id="m-cls" style="font-weight:600">-</div></div>
+      <div><div style="opacity:.8">TBT (≈)</div><div id="m-tbt" style="font-weight:600">-</div></div>
+      <div><div style="opacity:.8">Requêtes</div><div id="m-req" style="font-weight:600">-</div></div>
+      <div><div style="opacity:.8">Poids total</div><div id="m-bytes" style="font-weight:600">-</div></div>
+    </div>
+    <div style="margin-top:8px;font-size:12px;opacity:.8">
+      <div id="m-note">Cliquez sur <em>Mesurer</em> après vos modifications.</div>
+    </div>
+  `;
+  document.addEventListener('DOMContentLoaded', ()=>{ document.body.appendChild(panel); });
+
+  function update(){
+    collectResources();
+    collectNavigation();
+
+    const $ = id => panel.querySelector(id);
+    $('#m-fcp').textContent = fmtMs(state.fcp);
+    $('#m-lcp').textContent = fmtMs(state.lcp);
+    $('#m-cls').textContent = state.cls ? state.cls.toFixed(3) : '-';
+    $('#m-tbt').textContent = state.totalBlockingTime ? fmtMs(state.totalBlockingTime) : '-';
+    $('#m-req').textContent = String(state.totalRequests||'-');
+    $('#m-bytes').textContent = state.totalBytes ? fmtKB(state.totalBytes) : '-';
+
+    // Expose pour comparaison avant/après
+    window.__metrics = {
+      fcp: state.fcp, lcp: state.lcp, cls: state.cls,
+      tbtApprox: state.totalBlockingTime,
+      totalRequests: state.totalRequests,
+      totalBytes: state.totalBytes,
+      navigation: state.nav
+    };
+  }
+
+  // Actions
+  document.addEventListener('click', (e)=>{
+    if(e.target && e.target.id==='perf-refresh'){
+      // Forcer une collecte complète (post-load)
+      update();
+    }
+    if(e.target && e.target.id==='perf-close'){
+      panel.remove();
+    }
   });
 
-  function up(){
-    col();
-    const $=id=>p.querySelector(id);
-    $('#d-fcp').innerText=fmt(s.fcp);$('#d-lcp').innerText=fmt(s.lcp);
-    $('#d-cls').innerText=s.cls.toFixed(3);$('#d-tbt').innerText=fmt(s.tbt);
-    $('#d-req').innerText=s.req;$('#d-bytes').innerText=kb(s.bytes);
-  }
-
-  document.addEventListener('click',e=>{
-    if(e.target.id==='ref') up();
-    if(e.target.id==='cls') p.remove();
+  // Mise à jour initiale après load pour disposer des ressources
+  addEventListener('load', ()=>{
+    setTimeout(update, 0);
   });
 })();
