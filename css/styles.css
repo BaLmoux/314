@@ -19,6 +19,8 @@ html, body {
     background: var(--bg);
     color: var(--fg);
     font-family: 'Poppins', system-ui, Segoe UI, Roboto, Arial, sans-serif;
+    /* Améliore la fluidité du scroll */
+    scroll-behavior: smooth; 
 }
 
 /* --- LAYOUT GLOBAL --- */
@@ -31,20 +33,30 @@ a {
     color: var(--fg);
     text-decoration: none;
     opacity: .9;
+    transition: opacity 0.2s ease;
 }
 
 a:hover {
     opacity: 1;
 }
 
+/* --- OMBRES UNIFIÉES (Remplace extra.css) --- */
+.hero, .card, .feature, .cta {
+    box-shadow: 
+        0 2px 4px rgba(0,0,0,.14),
+        0 8px 24px rgba(0,0,0,.22), 
+        0 24px 60px rgba(0,0,0,.18);
+}
+
 /* --- NAVIGATION --- */
 .topbar {
     position: sticky;
     top: 0;
+    /* Optimisation GPU pour le flou */
     backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     background: linear-gradient(180deg, rgba(13, 16, 35, .8), rgba(13, 16, 35, .2));
     z-index: 10;
-    box-shadow: 0 10px 30px var(--shadow);
 }
 
 .nav {
@@ -101,8 +113,9 @@ a:hover {
     background: var(--primary);
     padding: 14px 20px;
     border-radius: 12px;
-    box-shadow: 0 20px 50px rgba(124, 92, 255, .35);
     transition: transform .2s ease, box-shadow .2s ease;
+    /* Optimisation : prévient le navigateur que ça va bouger */
+    will-change: transform; 
 }
 
 .cta:hover {
@@ -113,6 +126,9 @@ a:hover {
 /* --- SECTIONS --- */
 .section {
     padding: 60px 0;
+    /* PERFORMANCE : Ne fait pas le rendu tant que ce n'est pas visible */
+    content-visibility: auto;
+    contain-intrinsic-size: 1px 500px; /* Taille estimée pour éviter les sauts */
 }
 
 .section h2 {
@@ -130,7 +146,7 @@ a:hover {
     background: var(--card);
     border-radius: 16px;
     overflow: hidden;
-    box-shadow: 0 20px 60px var(--shadow);
+    /* Note : box-shadow géré plus haut avec le groupe unifié */
 }
 
 .card img {
@@ -156,7 +172,6 @@ a:hover {
     background: var(--card);
     padding: 18px;
     border-radius: 14px;
-    box-shadow: 0 14px 40px var(--shadow);
 }
 
 .feature .icon {
@@ -175,19 +190,13 @@ a:hover {
 
 /* --- MEDIA QUERIES (RESPONSIVE) --- */
 @media (max-width: 900px) {
-    .features-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-    .gallery .grid {
+    .features-grid, .gallery .grid {
         grid-template-columns: repeat(2, 1fr);
     }
 }
 
 @media (max-width: 560px) {
-    .features-grid {
-        grid-template-columns: 1fr;
-    }
-    .gallery .grid {
+    .features-grid, .gallery .grid {
         grid-template-columns: 1fr;
     }
 }
